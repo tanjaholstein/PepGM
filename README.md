@@ -3,8 +3,8 @@ for Felix
 
 A snakemake workflow 
 
- Input: mass spectrum mgf or mzML files, searchGUI parameter file, config file (DB used, target taxa, host)
-Output: Organism/ taxonomic classification with a confidence score, visualization of input/output data as phylogenetic tree and barplots<\p>
+Input: mass spectrum mgf (or mzML files), searchGUI parameter file, config file (DB used, target taxa, host, option for host filtering, etc)
+Output: Organism/ taxonomic classification with a confidence score, visualization of input/output data as phylogenetic tree and barplots
 
  The graphical model used was inspired by https://www.openms.de/comp/epifany/ 
  
