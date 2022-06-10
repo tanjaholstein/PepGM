@@ -6,10 +6,13 @@ import pandas as pd
 import math
 from scipy.signal import fftconvolve
 import pandas as pd
+from Bio import Entrez
 from FactorGraphGeneration import *
 
 import time
 
+
+#messagelog = [] #list of triples with from (node, to node, message) that logs all messages sent before the message class is initialized
 def normalize(Array):
     normalizedArray = Array/np.sum(Array)
     return normalizedArray
@@ -149,16 +152,15 @@ class ConvolutionTree:
     
     
 
+#class to hold and define all sum-product message passing methods
+#TODO detect loops & use dampening when messages do not converge
+#TODO clean up code & remove attributes I no langer use
+
 class Messages():
-    ''' 
-    Class holding all messages and beliefs.
-    Functions execute loopy residual belief propagation
-    '''
 
     #class that holds the messages of itereation t and iteration t+1 as dictionaries
 
     def __init__(self,CTGraphIn):
-
 
         self.Msg = {}
         self.MsgNew = {}
@@ -171,7 +173,7 @@ class Messages():
         self.CurrentBeliefs = {}
         self.CurrentBeliefsNew = {}
         self.category = CTGraphIn.category
-        #TODO check if I truly need all three of msg new, msglog and msg. chech if i need both fullresidual and fullresidual new, 
+        #TODO there are a lot of unnecessary class attributes here, which need to be found and removed
     
         
         for node in CTGraphIn.nodes(data = True):
@@ -209,8 +211,17 @@ class Messages():
 
     #variables (peptides,proteins,taxa)  
     def  GetIncomingMessageVariable(self,Node,NodeIN):
+        #Make sure to only multiply message in again if they have changed. Without checking this, peptide probs were multiplied in again and again
+        #if (np.asarray([self.Msg[Node,NodeIN] != np.asarray(self.MsgLog[Node,NodeIN])])).all():
+         #   check1 = self.Msg[Node,NodeIN] 
+        #    check2 = self.MsgLog[Node,NodeIN]
         returnedMessage = self.Msg[Node,NodeIN]
+            #self.MsgLog[Node,NodeIN] = returnedMessage
         return returnedMessage
+
+        #else:
+        #    return [1,1]
+
         
 
     def  ComputeOutMessageVariable(self,NodeOUT,NodeIN):
@@ -220,6 +231,8 @@ class Messages():
 
              if NodeOUTneighbors != NodeIN:
                 IncomingMessages.append(self.GetIncomingMessageVariable(NodeOUTneighbors, NodeOUT))
+                if not np.all(IncomingMessages):
+                    print('0 in messages encountered at variable level',NodeOUTneighbors)
          
          if not IncomingMessages:
                 check = any(NodeBelief == self.InitialBeliefs[NodeOUT])
@@ -243,7 +256,7 @@ class Messages():
         check2 = self.MsgLog[Node,NodeIN]
         returnedMessage = self.Msg[Node,NodeIN]
         return returnedMessage
-
+  
 
     def  ComputeOutMessageFactor(self,NodeOUT,NodeIN):
          IncomingMessages = []
@@ -254,26 +267,37 @@ class Messages():
                  if [self.GetIncomingMessageFactor(NodeOUTneighbors, NodeOUT)]:
                     #only the messages that have changed get multiplied into the current belief again                      
                     IncomingMessages.append(self.GetIncomingMessageFactor(NodeOUTneighbors, NodeOUT))
+                    if not np.all(IncomingMessages):
+                        print('0 in messages encountered at factor level',NodeOUTneighbors)
          
          if self.Graph.nodes[NodeIN]['category'] == 'Convolution Tree':
-                #handles empty & messages with only one value
-                IncomingMessages.append([1.,1.]) 
+                IncomingMessages.append([1.,1.]) #handles empty & messages with only one value
                 IncomingMessages = np.asarray(IncomingMessages).reshape(len(IncomingMessages),2)
                 OutMessages = normalize(np.multiply(NodeBelief,[np.prod(IncomingMessages[:,0]),np.prod(IncomingMessages[:,1])]))
-                #self.CurrentBeliefsNew[NodeOUT] = OutMessages
+              
                 
             
-                return np.add(OutMessages[:,0],OutMessages[:,1])    
+                return np.add(OutMessages[:,0],OutMessages[:,1]) 
+                   
          else:
                 if  np.asarray(IncomingMessages[0]).shape[0] > 2:
                     IncomingMessages = np.asarray(IncomingMessages).reshape(IncomingMessages[0].shape[0],1)
                     OutMessages = normalize(NodeBelief*IncomingMessages)
+                    if np.isnan(np.sum(OutMessages))==True:
+                        print('NaN in BP encountered')
                     return [np.sum(OutMessages[0,:]),np.sum(OutMessages[1,:])] 
                 else :
                     IncomingMessages.append([1.,1.])
-                    IncomingMessages = np.asarray(IncomingMessages).reshape(len(IncomingMessages),2)
-                    OutMessages = normalize(np.multiply(NodeBelief,[np.prod(IncomingMessages[:,0]),np.prod(IncomingMessages[:,1])])) 
-                    return [np.sum(OutMessages[0,:]),np.sum(OutMessages[1,:])] 
+                    IncomingMessages = np.asarray(np.log(IncomingMessages)).reshape(len(IncomingMessages),2)
+                    OutMessageLog = lognormalize(np.asarray([np.sum([np.log(NodeBelief[0]),np.sum(IncomingMessages[:,0])]),np.sum([np.log(NodeBelief[1]),np.sum(IncomingMessages[:,1])])]))
+                    return [np.sum(OutMessageLog[0,:]),np.sum(OutMessageLog[1,:])]
+                    #IncomingMessages = np.asarray(IncomingMessages).reshape(len(IncomingMessages),2)
+                    #OutMessages = normalize(np.multiply(NodeBelief,[np.prod(IncomingMessages[:,0]),np.prod(IncomingMessages[:,1])])) 
+                    #self.CurrentBeliefsNew[NodeOUT] = OutMessages
+                    #print([np.sum(OutMessages[0,:]),np.sum(OutMessages[1,:])] )
+                    #if np.isnan(np.sum(OutMessages))==True:
+                    #    stoppoint = 3
+                    #return [np.sum(OutMessages[0,:]),np.sum(OutMessages[1,:])] 
 
 
     #CTree, computes all out messages in one go
@@ -306,14 +330,18 @@ class Messages():
                 OldSharedLikelihoods = np.multiply(sharedLikelihoods,self.MsgLog[NodesIN,Node])
         
         if all(OldSharedLikelihoods != sharedLikelihoods) and any([(ProtProbList[i][0]) != (OldProtProbList[i][0])for i in range(len(ProtProbList))]):
-        #only update when the shared likelihhods or at least on of the protein messages has changed
+        #only update when the shared likelihoods or at least on of the protein messages has changed
             CT = ConvolutionTree(sharedLikelihoods,ProtProbList)
 
             for protein in range(len(ProtList)):
               self.MsgNew[Node,ProtList[protein]] = CT.MessageToVariable(protein)
+              if not np.all(self.MsgNew[Node,ProtList[protein]]):
+                    print('0 in messages encountered at CT output')
     
             for pep in peptides:
              self.MsgNew[Node,pep] = CT.MessageToSharedLikelihood()
+             if not np.all(self.MsgNew[Node,pep]):
+                print('0 in messages encountered at CT output')
         
         else:
             for protein in range(len(ProtList)):
@@ -363,9 +391,9 @@ class Messages():
                 
     
 
-    #compute updated messages for all edges
+    #compute messages for all edges
+    
     def ComputeUpdate(self, localloops = False):
-        
 
         self.ListOfCTs = [] #keeps track of which CT has already been active
 
@@ -379,6 +407,8 @@ class Messages():
                 StartName = self.MaxVal[1]
                 self.SingleEdgeDirectionUpdate(StartName, EndName)
             
+
+
         else:
             for edge in self.Graph.edges():
                 #update all edges
@@ -398,28 +428,25 @@ class Messages():
             self.FullResidual[(StartName, EndName)] = self.ComputeResidual(StartName, EndName)
                 
                 
+            
 
+        
+    
+    
+    #send only the message with largest Residual
     def updateResidualMessage(self,Residual):
-
-        '''
-        check which message Residual has the largest residual and updates that message in self.Msg
-        :param Residual: dict, residuals of the last belief propagation iteration
-        '''
 
         self.MaxVal = max(Residual, key = Residual.get)
         self.Msg[self.MaxVal] = self.MsgNew[self.MaxVal]
+        check = self.CurrentBeliefsNew[self.MaxVal[0]]
+        #self.CurrentBeliefs[self.MaxVal[0]] = self.CurrentBeliefsNew[self.MaxVal[0]]
         return Residual[self.MaxVal]
 
     
     
 
+    #run the loopy BP, returns number of iterations
     def LoopyLoop(self,maxLoops, tolerance,local = False):
-        '''
-        Run the loopy belief propagation algorithm
-        :param maxLoops: int, maximum number of iterations in case of non-convergence
-        :param tolerance: float, toleance for convergence check
-        :param local: Bool, parameter passed to Computed Update function
-        '''
         
         if not isinstance(local,bool):
             raise TypeError("localloops needs to be boolean")
@@ -435,6 +462,7 @@ class Messages():
                 self.ComputeUpdate()
                 self.MsgLog.update(self.Msg)
                 self.Msg.update(self.MsgNew)
+                #self.CurrentBeliefs.update(self.CurrentBeliefsNew)
                 k += 1
                 end_t = time.time()
                 print( "time per loop" , k, " ", end_t-start_t)
@@ -462,10 +490,17 @@ class Messages():
                 #log to avoid overflow
                 IncomingMessages = np.asarray(np.log(IncomingMessages)).reshape(len(IncomingMessages),2)
                 LoggedVariableMarginal = lognormalize(np.asarray([np.sum([np.log(self.InitialBeliefs[Variable][0]),np.sum(IncomingMessages[:,0])]),np.sum([np.log(self.InitialBeliefs[Variable][1]),np.sum(IncomingMessages[:,1])])]))
+                if np.isnan(np.sum(LoggedVariableMarginal))==True:
+                    stoppoint = 3
 
                 self.CurrentBeliefs[Variable] = LoggedVariableMarginal
 
 
+        
+
+
+
+    
     def DetectOscillations():
         pass
 
@@ -474,13 +509,6 @@ class Messages():
 
 #calibration through message passing of all subgraphs in the List of factor graphs
 def CalibrateAllSubgraphs(ListOfCTFactorGraphs, MaxIterations, Tolerance,local = False):
-    '''
-    Performs bayesian inferencethrough loopy belief propgation, returns dictionary {variable:posterior_probability}
-    :param ListOfCTFactorGraphs: list, contains FactorGraph objects on which inference can be performed
-    :param MaxIterations: int, max number of iterations in case of non-convergence
-    :param Tolerance: float, error tolerance between messages for convergence criterion
-    :param local: Bool, whether loops are calculated locally
-    '''
 
     if not isinstance(ListOfCTFactorGraphs,list):
         raise TypeError("ListOfFactorGraphs needs to be a list of graphs")    
@@ -490,7 +518,8 @@ def CalibrateAllSubgraphs(ListOfCTFactorGraphs, MaxIterations, Tolerance,local =
     ResultsList = []
     ResultsDict = {}
     NodeDict = {}
-   
+
+    
 
     for Graph in ListOfCTFactorGraphs:
 
@@ -502,16 +531,13 @@ def CalibrateAllSubgraphs(ListOfCTFactorGraphs, MaxIterations, Tolerance,local =
             ResultsList.append(InitializedMessageObject.CurrentBeliefs)
             ResultsDict.update(InitializedMessageObject.CurrentBeliefs)
 
+
+
+
     return ResultsList, ResultsDict, NodeDict
 
 #save the resulstsdictionary from CalibrateAllSubgraphs to a csv file
 def SaveResultsToCsv(ResultsDict,NodeDict,NameString):
-    '''
-    Save Loopy Belief Propagation results to .csv file
-    :param ResultsDict: dict, {variable:posterior_probability}
-    :param NodeDict: dict, dictionary of nodes that were in the factor graph and their attributes, to include the node category in the results
-    :param NameString: str, csv ouptut path
-    '''
 
     if not isinstance(NameString,str):
        raise TypeError("AddNameString needs to a string with Info on your run")
@@ -525,25 +551,26 @@ def SaveResultsToCsv(ResultsDict,NodeDict,NameString):
 
 
 
-        
 
 
 
 if __name__== '__main__':
 
 
- GraphMLPath = '/home/tholstei/repos/PepGM_all/PepGM/results/refseqViral/PXD005104_Herpessimplex_1/human_refseqViral_PepGM_graph.graphml'
+ GraphMLPath = '/home/tholstei/repos/PepGM_all/PepGM/results/refseqViral+SarsCoV2strains/Sars-CoV-2_omicron_sim/human_refseqViral+SarsCoV2strains_PepGM_graph.graphml'
  #GraphMLPath = '/home/tholstei/repos/PepGM_all/PepGM/results/refseqViral/PXD002936_avian_bronchitis/chicken_refseqViral_PepGM_graph.graphml'
- #alpha = 0.1
- #beta = 0.01
- #prior = 0.1
+ alpha = 0.01
+ beta = 0.04
+ prior = 0.3
  
  CTFactorgraph = CTFactorGraph(GraphMLPath)
  CTFactorgraph.FillInFactors(alpha,beta)
+ print('factor filled')
  CTFactorgraph.FillInPriors(prior)
+ print('priors filled')
  max_iter = 1000
  tol = 0.003
- out = '/home/tholstei/repos/PepGM_all/PepGM/results/refseqViral/PXD005104_Herpessimplex_1/human_refseqViral_PepGM_results_debug.csv'
+ out = '/home/tholstei/repos/PepGM_all/PepGM/results/refseqViral+SarsCiV2strains/Sars-CoV-2_omicron_sim/human_refseqViral_PepGM_results_debug.csv'
 
 
 

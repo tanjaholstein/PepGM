@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt 
 import matplotlib
 from ete3 import NCBITaxa
+import os
 import argparse
 
 matplotlib.use('Agg')
@@ -16,27 +17,27 @@ parser.add_argument('--out',type =str, help = 'path(s) to your results file')
 args = parser.parse_args()
 
 '''
-Script that takes PepGM .csv output, translates taxIDS to scientific names, and barplots the *number of results* highest scoring taxa
+Script that takes PepGM .csv output, translates taxIDS to scientific names, and barplots the *number of results* highest scoring taxa.
+Includes taxIDS not represented in the NCBI taxonomy database, to be added as --addTaxa
 '''
 
 
 ncbi = NCBITaxa()
-
-#read csv using pandas  
+     
 IDs = pd.read_csv(args.ResultsFile, names = ['ID','score','type'])
 TaxIDS = IDs.loc[IDs['type']=='taxon']
 TaxIDS.loc[:,'score'] = pd.to_numeric(TaxIDS['score'],downcast = 'float')
 TaxIDS = TaxIDS.sort_values('score')
+
+        
+       
 TaxaCheck = TaxIDS.ID.tolist()
 
-#translate taxids to scientific names
 TaxaNameDict = ncbi.get_taxid_translator(TaxIDS['ID'])
+TaxaNameDict.update({2697049001:'SARS-CoV-2 alpha',2697049002:'SARS-CoV-2 delta',2697049003:'SARS-CoV-2 omicron'})
 TaxaNames = [TaxaNameDict[int(tax)] for tax in TaxaCheck]
 Scores = TaxIDS['score']
-
-
-
-#make the barplot
+    
 fig, ax = plt.subplots()
 fig.set_size_inches(30,15)
 ax.barh(range(len(TaxaNames[-args.NumberofResults:])),Scores[-args.NumberofResults:], color='royalblue')
